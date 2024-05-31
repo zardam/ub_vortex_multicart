@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -e
+
+sha256sum -c uni-bios.sha256
+
+mkdir -p output
+cp uni-bios.rom uni-bios-pnm.rom
+dd if=uni-bios.rom of=output/uni-bios_r.rom conv=swab status=none
+
+for f in *.asm; do
+  vasm/vasmm68k_std -Fbin -m68000 -quiet -o "output/${f%.asm}.bin" "${f}"
+done
+
+patch () {
+  dd of=uni-bios-pnm.rom obs=1 seek=$(printf "%d" $1) conv=notrunc,swab status=none
+}
+
+printf 'vPnM' | patch 0x1c1ec
+
+# Bypass protection crash (replace beq.b by bra.b)
+printf '\x60' | patch 0x1e9e9
+
+# Skip checksum test
+printf '\x4e\x71\x4e\x71' | patch 0x11c62
+
+# NOP 161 in 1 detection
+printf '\x4e\x71' | patch 0x4478
+printf '\x4e\x71' | patch 0x4484
+
+# Avoid bug/protection in mess_out ?
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0x488c
+
+# Auto press key pnm at boot
+printf '\x4e\x71' | patch 0x4498
+printf '\x60'     | patch 0x449f
+
+## Remove calls to original 161 in 1 menu
+# ????
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0x44b2
+# pnm_init_softdips
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0x4574
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0x457a
+printf '\x4e\x71'                 | patch 0x4588
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0x458a
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0x45b2
+# Do not call Kof99 RAM routine
+printf '\x60' | patch 0x476d
+# pnm_save_softdips
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0xa830
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0xa836
+# pnm_load_soft_dips
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0xa89c
+printf '\x4e\x71\x4e\x71\x4e\x71' | patch 0xa8a2
+printf '\x4e\x71'                 | patch 0xa8b2
+
+# Patch load/save soft dips to backup ram
+printf '\x4e\xb9\x00\xc0\xab\xa6' | patch 0x4572
+printf '\x4e\xb9\x00\xc0\xab\xa6' | patch 0xa896
+printf '\x4e\xb9\x00\xc0\xab\xe6' | patch 0xa82a
+
+# Load/save soft dips functions
+cat output/load_soft_dips.bin | patch 0xaba6
+cat output/save_soft_dips.bin | patch 0xabe6
+
+# Patch switch game
+cat output/switch_game.bin | patch 0x0441c
+
+# Ignore high score backup
+printf '\x60' | patch 0xa74b
+printf '\x60' | patch 0xa77d
+
+# Add new game list, change game count
+python3 find_names.py > /dev/null
+cat output/games.bin | patch 0xa96e
+printf '\x07\x96' | patch 0xa276 # Move game list
+printf '\x9e' | patch 0xa2c0
+printf '\x9e' | patch 0xa3e4
+printf '\x9d' | patch 0xa3f8
+printf '\x9e' | patch 0xa408
+printf '\x9e' | patch 0xa416
+printf '\x9e' | patch 0xa41c
+printf '\x9e' | patch 0xa5aa
+printf '\x9e' | patch 0xa5b0
+printf '\x9e' | patch 0x47f4
+printf '\x9e' | patch 0x44f6
+printf '\x9d' | patch 0x47ec
+
+# Game index before 0 and after last in menu
+printf '\x99' | patch 0xa266
+printf '\xa7' | patch 0xa262
+
+# Correct earlier signed move
+printf '\x1b\x41\x0a\x69' | patch 0x47fa
+
+# Evict Xevious from attract mode
+printf '\x4e\xf9\x00\xc1\xff\xd0' | patch 0xa5a8
+cat output/evict_from_attract_mode.bin | patch 0x1ffd0
+
+sha256sum -c uni-bios-pnm.sha256
